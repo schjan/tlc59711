@@ -29,6 +29,7 @@ func main() {
 		log.Infof("%v steps in %v", bla, elapsed)
 	}
 }
+
 func SetAllValue(dev *tlc59711.Tlc59711, value uint16) {
 	for i := 0; i < 12; i++ {
 		dev.SetBuffer(i, value)

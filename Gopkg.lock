@@ -4,30 +4,58 @@
 [[projects]]
   name = "github.com/Sirupsen/logrus"
   packages = ["."]
-  revision = "f006c2ac4710855cf0f916dd6b77acf6b048dc6e"
-  version = "v1.0.3"
+  revision = "d682213848ed68c0a260ca37d6dd5ace8423f5ba"
+  version = "v1.0.4"
 
 [[projects]]
   branch = "master"
   name = "golang.org/x/crypto"
   packages = ["ssh/terminal"]
-  revision = "6a293f2d4b14b8e6d3f0539e383f6d0d30fce3fd"
-
-[[projects]]
-  branch = "master"
-  name = "golang.org/x/exp"
-  packages = ["io/spi","io/spi/driver"]
-  revision = "be09b602c40b1028d91bf805b38a6f54741fc34d"
+  revision = "a6600008915114d9c087fad9f03d75087b1a74df"
 
 [[projects]]
   branch = "master"
   name = "golang.org/x/sys"
-  packages = ["unix","windows"]
-  revision = "1e2299c37cc91a509f1b12369872d27be0ce98a6"
+  packages = [
+    "unix",
+    "windows"
+  ]
+  revision = "2c42eef0765b9837fbdab12011af7830f55f88f0"
+
+[[projects]]
+  name = "periph.io/x/periph"
+  packages = [
+    ".",
+    "conn",
+    "conn/gpio",
+    "conn/gpio/gpioreg",
+    "conn/i2c",
+    "conn/i2c/i2creg",
+    "conn/pin",
+    "conn/pin/pinreg",
+    "conn/spi",
+    "conn/spi/spireg",
+    "devices",
+    "host",
+    "host/allwinner",
+    "host/bcm283x",
+    "host/chip",
+    "host/cpu",
+    "host/distro",
+    "host/fs",
+    "host/odroidc1",
+    "host/pine64",
+    "host/pmem",
+    "host/rpi",
+    "host/sysfs",
+    "host/videocore"
+  ]
+  revision = "bdb4e4c4979bc79ee8c99e6432bd16519d7902a1"
+  version = "v2.1.0"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "2632537540be17067265dfaef86e2a845136cc35d31ddf9e33728795537a2aa8"
+  inputs-digest = "11f87bb7c5827b51e42acc0a5f51f78874c5c4c0778cf8781fe8e4bfa56890f6"
   solver-name = "gps-cdcl"
   solver-version = 1

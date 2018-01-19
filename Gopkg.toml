@@ -23,8 +23,8 @@
 
 [[constraint]]
   name = "github.com/Sirupsen/logrus"
-  version = "1.0.3"
+  version = "^1.0.3"
 
 [[constraint]]
-  branch = "master"
-  name = "github.com/fulr/spidev"
+  version = "^2.1.0"
+  name = "periph.io/x/periph"

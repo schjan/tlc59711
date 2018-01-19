@@ -2,8 +2,10 @@ package tlc59711
 
 import (
 	"fmt"
-	"golang.org/x/exp/io/spi"
 	log "github.com/Sirupsen/logrus"
+	"periph.io/x/periph/conn/spi"
+	"periph.io/x/periph/conn/spi/spireg"
+	"periph.io/x/periph/host"
 	"time"
 )
 
@@ -12,8 +14,8 @@ type Max7219Reg byte
 type LED byte
 
 const (
-	LED0  LED = 0
-	LED1      = iota
+	LED0 LED = 0
+	LED1     = iota
 	LED2
 	LED3
 	LED4
@@ -32,7 +34,9 @@ const LEDCOUNT = 12
 type Tlc59711 struct {
 	count   int
 	buffer  []uint16
-	spi     *spi.Device
+	port    spi.PortCloser
+	conn    spi.Conn
+	spistr  string
 	toWrite chan []byte
 	abort   chan struct{}
 }
@@ -47,22 +51,25 @@ func NewDevice(cascaded int) *Tlc59711 {
 }
 
 func (d *Tlc59711) Open(spibus int, spidevice int) error {
+	_, err := host.Init()
+	if err != nil {
+		log.WithError(err).Fatal()
+	}
 
-	devstr := fmt.Sprintf("/dev/spidev%d.%d", spibus, spidevice)
-	dev, err := spi.Open(&spi.Devfs{
-		Dev:      devstr,
-		Mode:     spi.Mode3,
-		MaxSpeed: 500000,
-	})
+	d.spistr = fmt.Sprintf("/dev/spidev%d.%d", spibus, spidevice)
+
+	port, err := spireg.Open(d.spistr)
 	if err != nil {
 		return err
 	}
-	err = dev.SetBitOrder(spi.MSBFirst)
+	d.port = port
+
+	conn, err := port.Connect(int64(500000), spi.Mode3, 8)
 	if err != nil {
 		return err
 	}
+	d.conn = conn
 
-	d.spi = dev
 	d.init()
 
 	return nil
@@ -74,7 +81,11 @@ func (d *Tlc59711) worker() {
 		case <-d.abort:
 			return
 		case buf := <-d.toWrite:
-			d.spi.Tx(buf, nil)
+			err := d.conn.Tx(buf, nil)
+			if err != nil {
+				log.Errorf("Error sending Datapacket to %v. Shutdown worker. : %v", d.spistr, err)
+				return
+			}
 			time.Sleep(4 * time.Microsecond)
 		}
 	}
@@ -83,11 +94,11 @@ func (d *Tlc59711) worker() {
 func (d *Tlc59711) Close() {
 	d.abort <- struct{}{}
 
-	if d.spi == nil {
+	if d.port == nil {
 		return
 	}
 
-	err := d.spi.Close()
+	err := d.port.Close()
 
 	log.Warn(err)
 }
@@ -98,8 +109,8 @@ func (d *Tlc59711) init() {
 
 func (d *Tlc59711) sendBufferLine(pos int) error {
 	BCr := uint32(0x7F)
-	BCg := BCr
-	BCb := BCg
+	BCg := uint32(0x7F)
+	BCb := uint32(0x7F)
 
 	command := uint32(0x25)
 	command <<= 5
@@ -113,21 +124,24 @@ func (d *Tlc59711) sendBufferLine(pos int) error {
 	command |= BCb
 
 	buf := make([]byte, 28)
-	for i, val := range d.buffer {
-		buf[i*2+4] = uint8(val >> 8)
-		buf[i*2+5] = uint8(val & 0xFF)
-	}
-
 	buf[0] = uint8(command >> 24)
 	buf[1] = uint8(command >> 16)
 	buf[2] = uint8(command >> 8)
 	buf[3] = uint8(command & 0xFF)
 
-	d.toWrite <- buf
-	//err := d.spi.Tx(buf, nil)
-	//if err != nil {
-	//	return err
+	for i := 0; i < 12; i++ {
+		bufI := i*2 + 4
+		dbufI := pos*12 + i
+		buf[bufI] = uint8(d.buffer[dbufI] >> 8)
+		buf[bufI+1] = uint8(d.buffer[dbufI] & 0xFF)
+	}
+
+	//for i, val := range d.buffer {
+	//	buf[i*2+4] = uint8(val >> 8)
+	//	buf[i*2+5] = uint8(val & 0xFF)
 	//}
+
+	d.toWrite <- buf
 
 	return nil
 }
