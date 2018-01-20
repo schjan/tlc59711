@@ -32,18 +32,23 @@ const (
 const LEDCOUNT = 12
 
 type Tlc59711 struct {
-	count   int
-	buffer  []uint16
-	port    spi.PortCloser
-	conn    spi.Conn
-	spistr  string
-	toWrite chan []byte
-	abort   chan struct{}
+	count         int
+	buffer        []uint16
+	port          spi.PortCloser
+	conn          spi.Conn
+	spistr        string
+	toWrite       chan []byte
+	abort         chan struct{}
+	BCr, BCg, BCb uint32
 }
 
 func NewDevice(cascaded int) *Tlc59711 {
 	buf := make([]uint16, LEDCOUNT*cascaded)
-	dev := &Tlc59711{count: cascaded, buffer: buf, toWrite: make(chan []byte, 1000), abort: make(chan struct{}, 1)}
+	dev := &Tlc59711{count: cascaded, buffer: buf, toWrite: make(chan []byte), abort: make(chan struct{})}
+
+	dev.BCr = 0x7F
+	dev.BCg = 0x7F
+	dev.BCb = 0x7F
 
 	go dev.worker()
 
@@ -64,7 +69,7 @@ func (d *Tlc59711) Open(spibus int, spidevice int) error {
 	}
 	d.port = port
 
-	conn, err := port.Connect(int64(500000), spi.Mode3, 8)
+	conn, err := port.Connect(int64(8000000), spi.Mode3, 8)
 	if err != nil {
 		return err
 	}
@@ -86,7 +91,6 @@ func (d *Tlc59711) worker() {
 				log.Errorf("Error sending Datapacket to %v. Shutdown worker. : %v", d.spistr, err)
 				return
 			}
-			time.Sleep(4 * time.Microsecond)
 		}
 	}
 }
@@ -107,41 +111,36 @@ func (d *Tlc59711) init() {
 	d.buffer[0] = 65125
 }
 
-func (d *Tlc59711) sendBufferLine(pos int) error {
-	BCr := uint32(0x7F)
-	BCg := uint32(0x7F)
-	BCb := uint32(0x7F)
-
+func (d *Tlc59711) sendBufferLine() error {
 	command := uint32(0x25)
 	command <<= 5
 	//OUTTMG = 1, EXTGCK = 0, TMGRST = 1, DSPRPT = 1, BLANK = 0 -> 0x16
 	command |= 0x16
 	command <<= 7
-	command |= BCr
+	command |= d.BCr
 	command <<= 7
-	command |= BCg
+	command |= d.BCg
 	command <<= 7
-	command |= BCb
+	command |= d.BCb
 
-	buf := make([]byte, 28)
-	buf[0] = uint8(command >> 24)
-	buf[1] = uint8(command >> 16)
-	buf[2] = uint8(command >> 8)
-	buf[3] = uint8(command & 0xFF)
+	buf := make([]byte, 28*d.count)
+	for dev := 0; dev < d.count; dev++ {
+		buf[0+dev*28] = uint8(command >> 24)
+		buf[1+dev*28] = uint8(command >> 16)
+		buf[2+dev*28] = uint8(command >> 8)
+		buf[3+dev*28] = uint8(command & 0xFF)
 
-	for i := 0; i < 12; i++ {
-		bufI := i*2 + 4
-		dbufI := pos*12 + i
-		buf[bufI] = uint8(d.buffer[dbufI] >> 8)
-		buf[bufI+1] = uint8(d.buffer[dbufI] & 0xFF)
+		for i := 0; i < 12; i++ {
+			bufI := i*2 + 4
+			dbufI := dev*12 + i
+			buf[bufI+dev*28] = uint8(d.buffer[dbufI] >> 8)
+			buf[bufI+1+dev*28] = uint8(d.buffer[dbufI] & 0xFF)
+		}
 	}
 
-	//for i, val := range d.buffer {
-	//	buf[i*2+4] = uint8(val >> 8)
-	//	buf[i*2+5] = uint8(val & 0xFF)
-	//}
-
-	d.toWrite <- buf
+	//d.toWrite <- buf
+	d.conn.Tx(buf, nil)
+	time.Sleep(4 * time.Nanosecond)
 
 	return nil
 }
@@ -151,17 +150,10 @@ func (d *Tlc59711) SetBuffer(id int, value uint16) {
 }
 
 func (d *Tlc59711) Flush() error {
-	err := d.sendBufferLine(0)
+	err := d.sendBufferLine()
 	if err != nil {
 		return err
 	}
-
-	//for i := 0; i < LEDCOUNT; i++ {
-	//	err := d.sendBufferLine(i)
-	//	if err != nil {
-	//		return err
-	//	}
-	//}
 
 	return nil
 }
