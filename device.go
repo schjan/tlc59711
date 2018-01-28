@@ -2,31 +2,10 @@ package tlc59711
 
 import (
 	"fmt"
-	log "github.com/Sirupsen/logrus"
 	"periph.io/x/periph/conn/spi"
 	"periph.io/x/periph/conn/spi/spireg"
 	"periph.io/x/periph/host"
 	"time"
-)
-
-type Max7219Reg byte
-
-type LED byte
-
-const (
-	LED0 LED = 0
-	LED1     = iota
-	LED2
-	LED3
-	LED4
-	LED5
-	LED6
-	LED7
-	LED8
-	LED9
-	LED10
-	LED11
-	LED12
 )
 
 const LEDCOUNT = 12
@@ -50,15 +29,13 @@ func NewDevice(cascaded int) *Tlc59711 {
 	dev.BCg = 0x7F
 	dev.BCb = 0x7F
 
-	go dev.worker()
-
 	return dev
 }
 
 func (d *Tlc59711) Open(spibus int, spidevice int) error {
 	_, err := host.Init()
 	if err != nil {
-		log.WithError(err).Fatal()
+		return err
 	}
 
 	d.spistr = fmt.Sprintf("/dev/spidev%d.%d", spibus, spidevice)
@@ -80,38 +57,23 @@ func (d *Tlc59711) Open(spibus int, spidevice int) error {
 	return nil
 }
 
-func (d *Tlc59711) worker() {
-	for true {
-		select {
-		case <-d.abort:
-			return
-		case buf := <-d.toWrite:
-			err := d.conn.Tx(buf, nil)
-			if err != nil {
-				log.Errorf("Error sending Datapacket to %v. Shutdown worker. : %v", d.spistr, err)
-				return
-			}
-		}
-	}
-}
-
-func (d *Tlc59711) Close() {
+func (d *Tlc59711) Close() error {
 	d.abort <- struct{}{}
 
 	if d.port == nil {
-		return
+		return nil
 	}
 
 	err := d.port.Close()
 
-	log.Warn(err)
+	return err
 }
 
 func (d *Tlc59711) init() {
 	d.buffer[0] = 65125
 }
 
-func (d *Tlc59711) sendBufferLine() error {
+func (d *Tlc59711) Flush() error {
 	command := uint32(0x25)
 	command <<= 5
 	//OUTTMG = 1, EXTGCK = 0, TMGRST = 1, DSPRPT = 1, BLANK = 0 -> 0x16
@@ -138,7 +100,6 @@ func (d *Tlc59711) sendBufferLine() error {
 		}
 	}
 
-	//d.toWrite <- buf
 	d.conn.Tx(buf, nil)
 	time.Sleep(4 * time.Nanosecond)
 
@@ -147,13 +108,4 @@ func (d *Tlc59711) sendBufferLine() error {
 
 func (d *Tlc59711) SetBuffer(id int, value uint16) {
 	d.buffer[id] = value
-}
-
-func (d *Tlc59711) Flush() error {
-	err := d.sendBufferLine()
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
