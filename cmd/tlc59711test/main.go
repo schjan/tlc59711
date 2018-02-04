@@ -34,6 +34,7 @@ func main() {
 		log.Infof("%v steps in %v", bla, elapsed)
 	}
 
+	dev.EnableAutoflush()
 	for {
 		start := time.Now()
 		log.Info("start")

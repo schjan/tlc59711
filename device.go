@@ -33,7 +33,13 @@ type Tlc59711 struct {
 
 func NewDevice(cascaded int) *Tlc59711 {
 	buf := make([]uint16, LEDCOUNT*cascaded)
-	dev := &Tlc59711{count: cascaded, buffer: buf, toWrite: make(chan []byte), abort: make(chan struct{})}
+	dev := &Tlc59711{
+		count:       cascaded,
+		buffer:      buf,
+		toWrite:     make(chan []byte),
+		abort:       make(chan struct{}),
+		isDirtySync: &sync.Mutex{},
+		isDirtyVar:  true}
 
 	dev.BCr = 0x7F
 	dev.BCg = 0x7F
@@ -133,7 +139,7 @@ func (d *Tlc59711) flush() error {
 func (d *Tlc59711) EnableAutoflush() error {
 	d.autoflushOnce.Do(func() {
 		d.autoflushEnabled = true
-
+		go d.autoflush()
 	})
 
 	return nil
@@ -164,5 +170,6 @@ func (d *Tlc59711) isDirty() bool {
 func (d *Tlc59711) SetBuffer(id int, value uint16) {
 	d.isDirtySync.Lock()
 	d.buffer[id] = value
+	d.isDirtyVar = true
 	d.isDirtySync.Unlock()
 }
