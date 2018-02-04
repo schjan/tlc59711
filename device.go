@@ -1,8 +1,8 @@
 package tlc59711
 
 import (
+	"errors"
 	"fmt"
-	"github.com/pkg/errors"
 	"periph.io/x/periph/conn/spi"
 	"periph.io/x/periph/conn/spi/spireg"
 	"periph.io/x/periph/host"
@@ -91,7 +91,7 @@ func (d *Tlc59711) init() {
 
 func (d *Tlc59711) Flush() error {
 	if d.autoflushEnabled {
-		return errors.New("Autoflushing is enabled, so this call will do nothing")
+		return errors.New("autoflushing is enabled, so this call will do nothing")
 	}
 
 	return d.flush()

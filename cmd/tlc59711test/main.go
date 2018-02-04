@@ -17,16 +17,20 @@ func main() {
 	defer dev.Close()
 	defer SetAllValue(dev, 0)
 
+	dev.EnableAutoflush()
+
 	for true {
 		bla := 0
 		start := time.Now()
 		log.Info("start")
 		for i := uint16(0); i < 65505; i += 20 {
 			SetAllValue(dev, i)
+			time.Sleep(10 * time.Millisecond)
 			bla++
 		}
 		for i := uint16(65500); i > 0; i -= 20 {
 			SetAllValue(dev, i)
+			time.Sleep(10 * time.Millisecond)
 			bla++
 		}
 		elapsed := time.Since(start)
@@ -34,7 +38,6 @@ func main() {
 		log.Infof("%v steps in %v", bla, elapsed)
 	}
 
-	dev.EnableAutoflush()
 	for {
 		start := time.Now()
 		log.Info("start")
@@ -55,5 +58,4 @@ func SetAllValue(dev *tlc59711.Tlc59711, value uint16) {
 	for i := 12; i < 24; i++ {
 		dev.SetBuffer(i, 65505-value)
 	}
-	//dev.Flush()
 }
