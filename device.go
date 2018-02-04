@@ -1,8 +1,8 @@
 package tlc59711
 
 import (
-	"errors"
 	"fmt"
+	"github.com/pkg/errors"
 	"periph.io/x/periph/conn/spi"
 	"periph.io/x/periph/conn/spi/spireg"
 	"periph.io/x/periph/host"
