@@ -54,5 +54,5 @@ func SetAllValue(dev *tlc59711.Tlc59711, value uint16) {
 	for i := 12; i < 24; i++ {
 		dev.SetBuffer(i, 65505-value)
 	}
-	dev.Flush()
+	//dev.Flush()
 }
