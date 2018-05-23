@@ -8,15 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"periph.io/x/periph"
 	"periph.io/x/periph/conn/gpio"
 	"periph.io/x/periph/conn/gpio/gpioreg"
+	"periph.io/x/periph/conn/gpio/gpiostream"
 	"periph.io/x/periph/host/distro"
 	"periph.io/x/periph/host/pmem"
 	"periph.io/x/periph/host/sysfs"
+	"periph.io/x/periph/host/videocore"
 )
 
 // All the pins supported by the CPU.
@@ -81,6 +84,62 @@ func Present() bool {
 	return false
 }
 
+// PinsRead0To31 returns the value of all GPIO0 to GPIO31 at their corresponding
+// bit as a single read operation.
+//
+// This function is extremely fast and does no error checking.
+//
+// The returned bits are valid for both inputs and outputs.
+func PinsRead0To31() uint32 {
+	return gpioMemory.level[0]
+}
+
+// PinsClear0To31 clears the value of GPIO0 to GPIO31 pin for the bit set at
+// their corresponding bit as a single write operation.
+//
+// This function is extremely fast and does no error checking.
+func PinsClear0To31(mask uint32) {
+	gpioMemory.outputClear[0] = mask
+}
+
+// PinsSet0To31 sets the value of GPIO0 to GPIO31 pin for the bit set at their
+// corresponding bit as a single write operation.
+func PinsSet0To31(mask uint32) {
+	gpioMemory.outputSet[0] = mask
+}
+
+// PinsRead32To46 returns the value of all GPIO32 to GPIO46 at their
+// corresponding 'bit minus 32' as a single read operation.
+//
+// This function is extremely fast and does no error checking.
+//
+// The returned bits are valid for both inputs and outputs.
+//
+// Bits above 15 are guaranteed to be 0.
+func PinsRead32To46() uint32 {
+	return gpioMemory.level[1] & 0x7fff
+}
+
+// PinsClear32To46 clears the value of GPIO31 to GPIO46 pin for the bit set at
+// their corresponding 'bit minus 32' as a single write operation.
+//
+// This function is extremely fast and does no error checking.
+//
+// Bits above 15 are ignored.
+func PinsClear32To46(mask uint32) {
+	gpioMemory.outputClear[1] = (mask & 0x7fff)
+}
+
+// PinsSet32To46 sets the value of GPIO31 to GPIO46 pin for the bit set at
+// their corresponding 'bit minus 32' as a single write operation.
+//
+// This function is extremely fast and does no error checking.
+//
+// Bits above 15 are ignored.
+func PinsSet32To46(mask uint32) {
+	gpioMemory.outputSet[1] = (mask & 0x7fff)
+}
+
 // Pin is a GPIO number (GPIOnn) on BCM238(5|6|7).
 //
 // Pin implements gpio.PinIO.
@@ -91,9 +150,11 @@ type Pin struct {
 	defaultPull gpio.Pull
 
 	// Mutable.
-	edge       *sysfs.Pin // Set once, then never set back to nil.
-	usingEdge  bool       // Set when edge detection is enabled.
-	usingClock bool       // Set when a GPCLK or PWM clock is used.
+	edge       *sysfs.Pin     // Set once, then never set back to nil.
+	usingEdge  bool           // Set when edge detection is enabled.
+	usingClock bool           // Set when a GPCLK, PWM or PCM clock is used.
+	dmaCh      *dmaChannel    // Set when DMA is used for PWM or PCM.
+	dmaBuf     *videocore.Mem // Set when DMA is used for PWM or PCM.
 }
 
 // PinIO implementation.
@@ -325,66 +386,42 @@ func (p *Pin) FastOut(l gpio.Level) {
 //
 // PWM pins
 //
-// PWM0 is exposed on pins 12, 18 and 40.
+// PWM0 is exposed on pins 12, 18 and 40. However, PWM0 is used for generating
+// clock for DMA and unavailable for PWM.
 //
 // PWM1 is exposed on pins 13, 19, 41 and 45.
 //
-// PWM0 and PWM1 share the same 25Mhz clock source. The period must be a
-// divisor of 25Mhz.
+// PWM1 uses 25Mhz clock source. The period must be a divisor of 25Mhz.
 //
-// Clock pins
-//
-// Clock GPCLK0 is exposed on pins 4, 20 32 and 34.
-//
-// Clock GPCLK2 is exposed on pins 6 and 43.
-//
-// Clocks can only be used with duty 0, gpio.DutyHalf or gpio.DutyMax. They
-// also have relatively limited frequency range from 4.8kHz to 1MHz with a
-// specific set of values supported.
+// DMA driven PWM is available for all pins except PWM1 pins, its resolution is
+// 200KHz which is down-sampled from 25MHz clock above. The number of DMA driven
+// PWM is limited.
 //
 // Furthermore, these can only be used if the drive "bcm283x-dma" was loaded.
 // It can only be loaded if the process has root level access.
 //
 // The user must call either Halt(), In(), Out(), PWM(0,..) or
-// PWM(gpio.DutyMax,..) to stop the clock source before exiting the program.
+// PWM(gpio.DutyMax,..) to stop the clock source and DMA engine before exiting
+// the program.
 func (p *Pin) PWM(duty gpio.Duty, period time.Duration) error {
 	if duty == 0 {
 		return p.Out(gpio.Low)
 	} else if duty == gpio.DutyMax {
 		return p.Out(gpio.High)
 	}
-	if period < 500*time.Nanosecond {
-		// High clock rate tends to hang the RPi. Need to investigate more.
-		return p.wrap(errors.New("period must be at least 500ns"))
-	}
-	f := alt0
-	clkID := -1
+	f := out
+	useDMA := false
 	switch p.number {
-	case 4, 32, 34:
-		if duty != gpio.DutyHalf {
-			return p.wrap(errors.New("pin can only be used with 50% duty cycle"))
-		}
-		clkID = 0
-	case 5, 21, 42, 44:
-		return p.wrap(errors.New("GPCLK1 cannot be safely used"))
-	case 6, 43:
-		if duty != gpio.DutyHalf {
-			return p.wrap(errors.New("pin can only be used with 50% duty cycle"))
-		}
-		clkID = 2
-	case 20:
-		if duty != gpio.DutyHalf {
-			return p.wrap(errors.New("pin can only be used with 50% duty cycle"))
-		}
-		clkID = 0
-		f = alt5
-	case 12, 13, 40, 41, 45: // PWM
-	case 18, 19: // PWM
+	case 12, 40: // PWM0 alt0: disabled
+		useDMA = true
+	case 13, 41, 45: // PWM1
+		f = alt0
+	case 18: // PWM0 alt5: disabled
+		useDMA = true
+	case 19: // PWM1
 		f = alt5
 	default:
-		// Technically 52 and 53 could also support PWM as alt1 but they are assumed
-		// to be used for the SD Card.
-		return p.wrap(errors.New("pwm is not supported on this pin"))
+		useDMA = true
 	}
 
 	// Intentionally check later, so a more informative error is returned on
@@ -395,59 +432,103 @@ func (p *Pin) PWM(duty gpio.Duty, period time.Duration) error {
 	if pwmMemory == nil || clockMemory == nil {
 		return p.wrap(errors.New("bcm283x-dma not initialized; try again as root?"))
 	}
-
-	// Convert period to frequency. This is lossy.
-	hz := uint64(time.Second / period)
-
-	if clkID != -1 {
-		// Using a clock pin.
-		var clk *clock
-		switch clkID {
-		case 0:
-			clk = &clockMemory.gp0
-		case 2:
-			clk = &clockMemory.gp2
+	if useDMA {
+		minPeriod := 2 * time.Second / time.Duration(pwmDMAFreq)
+		if period < minPeriod {
+			return p.wrap(fmt.Errorf("period must be at least %s", minPeriod))
 		}
-		actual, waits, err := clk.set(hz, 1)
-		if err != nil {
+
+		// Total cycles in the period
+		rng := pwmDMAFreq * uint64(period) / uint64(time.Second)
+		// Pulse width cycles
+		dat := uint32((rng*uint64(duty) + uint64(gpio.DutyHalf)) / uint64(gpio.DutyMax))
+		var err error
+		// TODO(simokawa): Reuse DMA buffer if possible.
+		if err = p.haltDMA(); err != nil {
 			return p.wrap(err)
 		}
-		p.usingClock = true
-		if actual != hz {
-			return p.wrap(fmt.Errorf("asked for %dHz, got %dHz", hz, actual))
+		// Start clock before DMA starts.
+		if _, err = setPWMClockSource(); err != nil {
+			return p.wrap(err)
 		}
-		if waits != 1 {
-			return p.wrap(fmt.Errorf("got oversampled clock by %dx", waits))
+		if p.dmaCh, p.dmaBuf, err = startPWMbyDMA(p, uint32(rng), dat); err != nil {
+			return p.wrap(err)
 		}
-		p.setFunction(f)
-		return nil
-	}
-
-	// TODO(maruel): Leverage oversampling.
-	base_freq := uint64(25 * 1000 * 1000) // 25MHz
-	// Total cycles in the period
-	rng := base_freq * uint64(period) / uint64(time.Second)
-	// Pulse width cycles
-	dat := uint32(rng * uint64(duty) / uint64(gpio.DutyMax))
-	if _, _, err := clockMemory.pwm.set(base_freq, 1); err != nil {
-		return p.wrap(err)
+	} else {
+		minPeriod := 2 * time.Second / time.Duration(pwmBaseFreq)
+		if period < minPeriod {
+			return p.wrap(fmt.Errorf("period must be at least %s", minPeriod))
+		}
+		// Total cycles in the period
+		rng := pwmBaseFreq * uint64(period) / uint64(time.Second)
+		// Pulse width cycles
+		dat := uint32((rng*uint64(duty) + uint64(gpio.DutyHalf)) / uint64(gpio.DutyMax))
+		if _, err := setPWMClockSource(); err != nil {
+			return p.wrap(err)
+		}
+		// Bit shift for PWM0 and PWM1
+		shift := uint((p.number & 1) * 8)
+		if shift == 0 {
+			pwmMemory.rng1 = uint32(rng)
+			Nanospin(10 * time.Nanosecond)
+			pwmMemory.dat1 = uint32(dat)
+		} else {
+			pwmMemory.rng2 = uint32(rng)
+			Nanospin(10 * time.Nanosecond)
+			pwmMemory.dat2 = uint32(dat)
+		}
+		Nanospin(10 * time.Nanosecond)
+		old := pwmMemory.ctl
+		pwmMemory.ctl = (old & ^(0xff << shift)) | ((pwm1Enable | pwm1MS) << shift)
 	}
 	p.usingClock = true
-	// Bit shift for PWM0 and PWM1
-	shift := uint((p.number & 1) * 8)
-	if shift == 0 {
-		pwmMemory.rng1 = uint32(rng)
-		Nanospin(10 * time.Nanosecond)
-		pwmMemory.dat1 = uint32(dat)
-	} else {
-		pwmMemory.rng2 = uint32(rng)
-		Nanospin(10 * time.Nanosecond)
-		pwmMemory.dat2 = uint32(dat)
-	}
-	Nanospin(10 * time.Nanosecond)
-	old := pwmMemory.ctl
-	pwmMemory.ctl = (old & ^(0xff << shift)) | ((pwm1Enable | pwm1MS) << shift)
 	p.setFunction(f)
+	return nil
+}
+
+// StreamIn implements gpiostream.PinIn.
+//
+// DMA driven StreamOut is available for GPIO0 to GPIO31 pin and the maximum
+// resolution is 200kHz.
+func (p *Pin) StreamIn(pull gpio.Pull, s gpiostream.Stream) error {
+	b, ok := s.(*gpiostream.BitStreamLSB)
+	if !ok {
+		return errors.New("bcm283x: other Stream than BitStreamLSB are not implemented")
+	}
+	if err := p.In(pull, gpio.NoEdge); err != nil {
+		return err
+	}
+	if err := dmaReadStream(p, b); err != nil {
+		return p.wrap(err)
+	}
+	return nil
+}
+
+// StreamOut implements gpiostream.PinOut.
+//
+// PCM/I2S driven StreamOut is available for GPIO21 pin. The resolution is up to
+// 250MHz.
+//
+// For GPIO0 to GPIO31 except GPIO21 pin, DMA driven StreamOut is available and
+// the maximum resolution is 200kHz.
+func (p *Pin) StreamOut(s gpiostream.Stream) error {
+	if err := p.Out(gpio.Low); err != nil {
+		return err
+	}
+	// If the pin is PCM_DOUT, use PCM for much nicer stream and lower memory
+	// usage.
+	if p.number == 21 || p.number == 31 {
+		alt := alt0
+		if p.number == 31 {
+			alt = alt2
+		}
+		p.setFunction(alt)
+		if err := dmaWriteStreamPCM(p, s); err != nil {
+			return p.wrap(err)
+		}
+	} else if err := dmaWriteStreamEdges(p, s); err != nil {
+		return p.wrap(err)
+	}
 	return nil
 }
 
@@ -462,42 +543,53 @@ func (p *Pin) DefaultPull() gpio.Pull {
 
 // Internal code.
 
+func (p *Pin) haltDMA() error {
+	if p.dmaCh != nil {
+		p.dmaCh.reset()
+		p.dmaCh = nil
+	}
+	if p.dmaBuf != nil {
+		if err := p.dmaBuf.Close(); err != nil {
+			return p.wrap(err)
+		}
+		p.dmaBuf = nil
+	}
+	return nil
+}
+
 // haltClock disables the GPCLK/PWM clock if used.
 func (p *Pin) haltClock() error {
+	if err := p.haltDMA(); err != nil {
+		return err
+	}
 	if !p.usingClock {
 		return nil
 	}
 	p.usingClock = false
-	switch p.number {
-	// GPCLKx
-	case 4, 20, 32, 34:
-		if _, _, err := clockMemory.gp0.set(0, 0); err != nil {
-			return p.wrap(err)
-		}
-		return nil
-	case 5, 21, 42, 44:
-		return p.wrap(errors.New("GPCLK1 cannot be safely used"))
-	case 6, 43:
-		if _, _, err := clockMemory.gp2.set(0, 0); err != nil {
-			return p.wrap(err)
-		}
-		return nil
 
-	// PWMx
-	case 12, 13, 18, 19, 40, 45:
-		if _, _, err := clockMemory.pwm.set(0, 0); err != nil {
-			return p.wrap(err)
+	// Disable PWMx.
+	switch p.number {
+	// PWM0 is not used.
+	case 12, 18, 40:
+	// PWM1
+	case 13, 19, 41, 45:
+		for _, i := range []int{13, 19, 41, 45} {
+			if cpuPins[i].usingClock {
+				return nil
+			}
 		}
-		// Bit shift for PWM0 and PWM1.
 		shift := uint((p.number & 1) * 8)
 		pwmMemory.ctl &= ^(0xff << shift)
-		return nil
-
-	default:
-		// Technically 52 and 53 could also support PWM as alt1 but they are assumed
-		// to be used for the SD Card.
-		return p.wrap(errors.New("pwm is not supported on this pin"))
 	}
+
+	// Disable PWM clock if nobody use.
+	for _, pin := range cpuPins {
+		if pin.usingClock {
+			return nil
+		}
+	}
+	err := resetPWMClockSource()
+	return err
 }
 
 // function returns the current GPIO pin function.
@@ -807,6 +899,10 @@ func (d *driverGPIO) Prerequisites() []string {
 	return nil
 }
 
+func (d *driverGPIO) After() []string {
+	return []string{"sysfs-gpio"}
+}
+
 func (d *driverGPIO) Init() (bool, error) {
 	if !Present() {
 		return false, errors.New("bcm283x CPU not detected")
@@ -858,7 +954,18 @@ func (d *driverGPIO) Init() (bool, error) {
 
 	functions := map[string]struct{}{}
 	for i := range cpuPins {
+		name := cpuPins[i].Name()
+		num := strconv.Itoa(cpuPins[i].Number())
+		gpion := "GPIO" + num
+		// Unregister the pin if already registered. This happens with sysfs-gpio.
+		// Do not error on it, since sysfs-gpio may have failed to load.
+		_ = gpioreg.Unregister(gpion)
+		_ = gpioreg.Unregister(num)
+
 		if err := gpioreg.Register(&cpuPins[i], true); err != nil {
+			return true, err
+		}
+		if err := gpioreg.RegisterAlias(num, name); err != nil {
 			return true, err
 		}
 		// A pin set in alternate function but not described in `mapping` will
@@ -871,7 +978,7 @@ func (d *driverGPIO) Init() (bool, error) {
 			// functionality is changed.
 			if _, ok := functions[f]; !ok {
 				functions[f] = struct{}{}
-				if err := gpioreg.RegisterAlias(f, fmt.Sprintf("GPIO%d", i)); err != nil {
+				if err := gpioreg.RegisterAlias(f, gpion); err != nil {
 					return true, err
 				}
 			}
@@ -930,3 +1037,5 @@ var _ gpio.PinIO = &Pin{}
 var _ gpio.PinIn = &Pin{}
 var _ gpio.PinOut = &Pin{}
 var _ gpio.PinPWM = &Pin{}
+var _ gpiostream.PinIn = &Pin{}
+var _ gpiostream.PinOut = &Pin{}

@@ -598,8 +598,23 @@ func init() {
 // functions of each pin, and registers all the pins with gpio.
 func initPins() error {
 	for i := range cpupins {
+		name := cpupins[i].Name()
+		num := strconv.Itoa(cpupins[i].Number())
+		gpion := "GPIO" + num
+
+		// Unregister the pin if already registered. This happens with sysfs-gpio.
+		// Do not error on it, since sysfs-gpio may have failed to load.
+		_ = gpioreg.Unregister(gpion)
+		_ = gpioreg.Unregister(num)
+
 		// Register the pin with gpio.
 		if err := gpioreg.Register(cpupins[i], true); err != nil {
+			return err
+		}
+		if err := gpioreg.RegisterAlias(gpion, name); err != nil {
+			return err
+		}
+		if err := gpioreg.RegisterAlias(num, name); err != nil {
 			return err
 		}
 		// Iterate through alternate functions and register function->pin mapping.
@@ -607,14 +622,8 @@ func initPins() error {
 		// same function. Need investigation. For now just ignore errors.
 		for _, f := range cpupins[i].altFunc {
 			if f != "" && f[0] != '<' && f[:2] != "In" && f[:3] != "Out" {
-				// TODO(maruel): Stop ignoring errors by not registering the same
-				// function multiple times.
-				gpioreg.RegisterAlias(f, cpupins[i].Name())
-				/*
-					if err := gpioreg.RegisterAlias(f, cpupins[i].Number()); err != nil {
-						return true, err
-					}
-				*/
+				// Multiple pins may have the same function. The first wins.
+				_ = gpioreg.RegisterAlias(f, name)
 			}
 		}
 	}
@@ -660,6 +669,10 @@ func (d *driverGPIO) String() string {
 
 func (d *driverGPIO) Prerequisites() []string {
 	return nil
+}
+
+func (d *driverGPIO) After() []string {
+	return []string{"sysfs-gpio"}
 }
 
 // Init does nothing if an allwinner processor is not detected. If one is

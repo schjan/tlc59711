@@ -6,8 +6,7 @@
 package gpioreg
 
 import (
-	"fmt"
-	"sort"
+	"errors"
 	"strconv"
 	"sync"
 
@@ -24,12 +23,23 @@ import (
 func ByName(name string) gpio.PinIO {
 	mu.Lock()
 	defer mu.Unlock()
-	return getByName(name)
+	if p, ok := byName[name]; ok {
+		return p
+	}
+	if dest, ok := byAlias[name]; ok {
+		if p := getByNameDeep(dest); p != nil {
+			// Wraps the destination in an alias, so the name makes sense to the user.
+			// The main drawback is that casting into other gpio interfaces like
+			// gpio.PinPWM requires going through gpio.RealPin first.
+			return &pinAlias{p, name}
+		}
+	}
+	return nil
 }
 
 // All returns all the GPIO pins available on this host.
 //
-// The list is guaranteed to be in order of number.
+// The list is guaranteed to be in order of name using 'natural sorting'.
 //
 // This list excludes aliases.
 //
@@ -38,20 +48,10 @@ func ByName(name string) gpio.PinIO {
 func All() []gpio.PinIO {
 	mu.Lock()
 	defer mu.Unlock()
-	out := make(pinList, 0, len(byNumber))
-	seen := make(map[int]struct{}, len(byNumber[0]))
-	// Memory-mapped pins have highest priority, include all of them.
-	for _, p := range byNumber[0] {
-		out = append(out, p)
-		seen[p.Number()] = struct{}{}
+	out := make([]gpio.PinIO, 0, len(byName))
+	for _, p := range byName {
+		out = insertPinByName(out, p)
 	}
-	// Add in OS accessible pins that cannot be accessed via memory-map.
-	for _, p := range byNumber[1] {
-		if _, ok := seen[p.Number()]; !ok {
-			out = append(out, p)
-		}
-	}
-	sort.Sort(out)
 	return out
 }
 
@@ -61,17 +61,13 @@ func All() []gpio.PinIO {
 func Aliases() []gpio.PinIO {
 	mu.Lock()
 	defer mu.Unlock()
-	out := make(pinList, 0, len(byAlias))
-	for _, p := range byAlias {
-		// Skip aliases that were not resolved. This requires resolving all aliases.
-		if p.PinIO == nil {
-			if p.PinIO = getByName(p.dest); p.PinIO == nil {
-				continue
-			}
+	out := make([]gpio.PinIO, 0, len(byAlias))
+	for name, dest := range byAlias {
+		// Skip aliases that were not resolved.
+		if p := getByNameDeep(dest); p != nil {
+			out = insertPinByName(out, &pinAlias{p, name})
 		}
-		out = append(out, p)
 	}
-	sort.Sort(out)
 	return out
 }
 
@@ -79,95 +75,80 @@ func Aliases() []gpio.PinIO {
 //
 // Registering the same pin number or name twice is an error.
 //
-// `preferred` should be true when the pin being registered is exposing as much
-// functionality as possible via the underlying hardware. This is normally done
-// by accessing the CPU memory mapped registers directly.
-//
-// `preferred` should be false when the functionality is provided by the OS and
-// is limited or slower.
+// Deprecated: `preferred` is now ignored.
 //
 // The pin registered cannot implement the interface RealPin.
 func Register(p gpio.PinIO, preferred bool) error {
+	// TODO(maruel): Remove preferred in v3.
 	name := p.Name()
 	if len(name) == 0 {
-		return wrapf("can't register a pin with no name")
+		return errors.New("gpioreg: can't register a pin with no name")
 	}
-	if _, err := strconv.Atoi(name); err == nil {
-		return wrapf("can't register pin %q with name being only a number", name)
-	}
-	number := p.Number()
-	if number < 0 {
-		return wrapf("can't register pin %q with invalid pin number %d", name, number)
-	}
-	i := 0
-	other := 1
-	if !preferred {
-		i = 1
-		other = 0
+	if r, ok := p.(gpio.RealPin); ok {
+		return errors.New("gpioreg: can't register pin " + strconv.Quote(name) + ", it is already an alias to " + strconv.Quote(r.Real().String()))
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
-	if orig, ok := byNumber[i][number]; ok {
-		return wrapf("can't register pin %q twice with the same number %d; already registered as %s", name, number, orig)
+	if orig, ok := byName[name]; ok {
+		return errors.New("gpioreg: can't register pin " + strconv.Quote(name) + " twice; already registered as " + strconv.Quote(orig.String()))
 	}
-	if orig, ok := byName[i][name]; ok {
-		return wrapf("can't register pin %q twice; already registered as %s", name, orig)
+	if dest, ok := byAlias[name]; ok {
+		return errors.New("gpioreg: can't register pin " + strconv.Quote(name) + "; an alias already exist to: " + strconv.Quote(dest))
 	}
-	if r, ok := p.(gpio.RealPin); ok {
-		return wrapf("can't register pin %q, it is already an alias: %s; use RegisterAlias() instead", name, r)
-	}
-	if alias, ok := byAlias[name]; ok {
-		return wrapf("can't register pin %q; an alias already exist: %s", name, alias)
-	}
-	if orig, ok := byName[other][name]; ok && number != orig.Number() {
-		return wrapf("can't register pin %q twice with different number; already registered as %s", name, orig)
-	}
-	byNumber[i][number] = p
-	byName[i][name] = p
+	byName[name] = p
 	return nil
 }
 
 // RegisterAlias registers an alias for a GPIO pin.
 //
 // It is possible to register an alias for a pin that itself has not been
-// registered yet. It is valid to register an alias to another alias or to a
-// number. It is valid to register the same alias to the same dest multiple
-// times.
+// registered yet. It is valid to register an alias to another alias. It is
+// valid to register the same alias multiple times, overriding the previous
+// alias.
 func RegisterAlias(alias string, dest string) error {
 	if len(alias) == 0 {
-		return wrapf("can't register an alias with no name")
+		return errors.New("gpioreg: can't register an alias with no name")
 	}
 	if len(dest) == 0 {
-		return wrapf("can't register alias %q with no dest", alias)
-	}
-	if _, err := strconv.Atoi(alias); err == nil {
-		return wrapf("can't register alias %q with name being only a number", alias)
+		return errors.New("gpioreg: can't register alias " + strconv.Quote(alias) + " with no dest")
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
-	if orig := byAlias[alias]; orig != nil {
-		if orig.dest == dest {
-			// It is fine to register the same alias twice. This simplifies unit
-			// tests as there is no way to clear the registry (yet).
-			return nil
-		}
-		return wrapf("can't register alias %q twice; it is already an alias: %v", alias, orig)
+	if _, ok := byName[alias]; ok {
+		return errors.New("gpioreg: can't register alias " + strconv.Quote(alias) + " for a pin that exists")
 	}
-	byAlias[alias] = &pinAlias{name: alias, dest: dest}
+	byAlias[alias] = dest
 	return nil
+}
+
+// Unregister removes a previously registered GPIO pin or alias from the GPIO
+// pin registry.
+//
+// This can happen when a GPIO pin is exposed via an USB device and the device
+// is unplugged, or when a generic OS provided pin is superseded by a CPU
+// specific implementation.
+func Unregister(name string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := byName[name]; ok {
+		delete(byName, name)
+		return nil
+	}
+	if _, ok := byAlias[name]; ok {
+		delete(byAlias, name)
+		return nil
+	}
+	return errors.New("gpioreg: can't unregister unknown pin name " + strconv.Quote(name))
 }
 
 //
 
 var (
-	mu sync.Mutex
-	// The first map is preferred pins, the second is for more limited pins,
-	// usually going through OS-provided abstraction layer.
-	byNumber = [2]map[int]gpio.PinIO{{}, {}}
-	byName   = [2]map[string]gpio.PinIO{{}, {}}
-	byAlias  = map[string]*pinAlias{}
+	mu      sync.Mutex
+	byName  = map[string]gpio.PinIO{}
+	byAlias = map[string]string{}
 )
 
 // pinAlias implements an alias for a PinIO.
@@ -177,16 +158,12 @@ var (
 type pinAlias struct {
 	gpio.PinIO
 	name string
-	dest string
 }
 
 // String returns the alias name along the real pin's Name() in parenthesis, if
 // known, else the real pin's number.
 func (a *pinAlias) String() string {
-	if a.PinIO == nil {
-		return fmt.Sprintf("%s(%s)", a.name, a.dest)
-	}
-	return fmt.Sprintf("%s(%s)", a.name, a.PinIO.Name())
+	return a.name + "(" + a.PinIO.Name() + ")"
 }
 
 // Name returns the pinAlias's name.
@@ -199,49 +176,41 @@ func (a *pinAlias) Real() gpio.PinIO {
 	return a.PinIO
 }
 
-func getByNumber(number int) gpio.PinIO {
-	if p, ok := byNumber[0][number]; ok {
+// getByNameDeep recursively resolves the aliases to get the pin.
+func getByNameDeep(name string) gpio.PinIO {
+	if p, ok := byName[name]; ok {
 		return p
 	}
-	if p, ok := byNumber[1][number]; ok {
-		return p
-	}
-	return nil
-}
-
-// getByName recursively resolves the aliases to get the pin.
-func getByName(name string) gpio.PinIO {
-	if p, ok := byName[0][name]; ok {
-		return p
-	}
-	if p, ok := byName[1][name]; ok {
-		return p
-	}
-	if p, ok := byAlias[name]; ok {
-		if p.PinIO == nil {
-			if p.PinIO = getByName(p.dest); p.PinIO == nil {
-				return nil
-			}
+	if dest, ok := byAlias[name]; ok {
+		if p := getByNameDeep(dest); p != nil {
+			// Return the deep pin directly, bypassing the aliases.
+			return p
 		}
-		return p
-	}
-	if i, err := strconv.Atoi(name); err == nil {
-		return getByNumber(i)
 	}
 	return nil
 }
 
-// wrapf returns an error that is wrapped with the package name.
-func wrapf(format string, a ...interface{}) error {
-	return fmt.Errorf("gpioreg: "+format, a...)
+// insertPinByName inserts pin p into list l while keeping l ordered by name.
+func insertPinByName(l []gpio.PinIO, p gpio.PinIO) []gpio.PinIO {
+	n := p.Name()
+	i := search(len(l), func(i int) bool { return lessNatural(n, l[i].Name()) })
+	l = append(l, nil)
+	copy(l[i+1:], l[i:])
+	l[i] = p
+	return l
 }
 
-type pinList []gpio.PinIO
-
-func (p pinList) Len() int           { return len(p) }
-func (p pinList) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
-func (p pinList) Less(i, j int) bool { return p[i].Number() < p[j].Number() }
-
-func init() {
-	Register(gpio.INVALID, true)
+// search implements the same algorithm as sort.Search().
+//
+// It was extracted to to not depend on sort, which depends on reflect.
+func search(n int, f func(int) bool) int {
+	lo := 0
+	for hi := n; lo < hi; {
+		if i := int(uint(lo+hi) >> 1); !f(i) {
+			lo = i + 1
+		} else {
+			hi = i
+		}
+	}
+	return lo
 }

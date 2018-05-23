@@ -1,10 +1,10 @@
 [[constraint]]
-  name = "github.com/Sirupsen/logrus"
-  version = "^1.0.3"
-
-[[constraint]]
   version = "^2.1.0"
   name = "periph.io/x/periph"
+
+[[constraint]]
+  name = "github.com/pkg/errors"
+  version = "^0.8.0"
 
 [prune]
   non-go = true

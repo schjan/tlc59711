@@ -92,10 +92,7 @@ func (p *Pin) Function() string {
 func (p *Pin) Halt() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err := p.haltEdge(); err != nil {
-		return err
-	}
-	return nil
+	return p.haltEdge()
 }
 
 // In setups a pin as an input.
@@ -131,7 +128,7 @@ func (p *Pin) In(pull gpio.Pull, edge gpio.Edge) error {
 				return p.wrap(err)
 			}
 			if err = p.event.MakeEvent(p.fValue.Fd()); err != nil {
-				p.fEdge.Close()
+				_ = p.fEdge.Close()
 				p.fEdge = nil
 				return p.wrap(err)
 			}
@@ -301,7 +298,7 @@ func (p *Pin) open() error {
 	p.fDirection, err = fileIOOpen(p.root+"direction", os.O_RDWR)
 	if err != nil {
 		p.err = err
-		p.fValue.Close()
+		_ = p.fValue.Close()
 		p.fValue = nil
 	}
 	return p.err
@@ -378,6 +375,10 @@ func (d *driverGPIO) Prerequisites() []string {
 	return nil
 }
 
+func (d *driverGPIO) After() []string {
+	return nil
+}
+
 // Init initializes GPIO sysfs handling code.
 //
 // Uses gpio sysfs as described at
@@ -436,7 +437,11 @@ func (d *driverGPIO) parseGPIOChip(path string) error {
 		if err := gpioreg.Register(p, false); err != nil {
 			return err
 		}
-		// We cannot use gpio.MapFunction() since there is no API to determine this.
+		// If there is a CPU memory mapped gpio pin with the same number, the
+		// driver has to unregister this pin and map its own after.
+		if err := gpioreg.RegisterAlias(strconv.Itoa(i), p.name); err != nil {
+			return err
+		}
 	}
 	return nil
 }

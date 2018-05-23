@@ -1,8 +1,8 @@
 package main
 
 import (
-	log "github.com/Sirupsen/logrus"
 	"github.com/schjan/tlc59711"
+	"log"
 	"time"
 )
 
@@ -19,10 +19,10 @@ func main() {
 
 	dev.EnableAutoflush()
 
-	for true {
+	for {
 		bla := 0
 		start := time.Now()
-		log.Info("start")
+		log.Println("start")
 		for i := uint16(0); i < 65505; i += 20 {
 			SetAllValue(dev, i)
 			time.Sleep(10 * time.Millisecond)
@@ -35,19 +35,19 @@ func main() {
 		}
 		elapsed := time.Since(start)
 
-		log.Infof("%v steps in %v", bla, elapsed)
+		log.Printf("%v steps in %v/n", bla, elapsed)
 	}
 
 	for {
 		start := time.Now()
-		log.Info("start")
+		log.Println("start")
 		SetAllValue(dev, 0)
 
 		time.Sleep(500 * time.Millisecond)
 		SetAllValue(dev, 65505)
 		time.Sleep(500 * time.Millisecond)
 		elapsed := time.Since(start)
-		log.Infof("in %v", elapsed)
+		log.Printf("in %v/n", elapsed)
 	}
 }
 

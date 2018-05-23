@@ -32,8 +32,16 @@ import (
 //
 // The resulting object is safe for concurrent use.
 //
-// busNumber is the bus number as exported by deffs. For example if the path is
+// busNumber is the bus number as exported by devfs. For example if the path is
 // /dev/spidev0.1, busNumber should be 0 and chipSelect should be 1.
+//
+// Do not use sysfs.NewSPI() directly as the package sysfs is providing a
+// https://periph.io/x/periph/conn/spi Linux-specific implementation.
+//
+// periph.io works on many OSes!
+//
+// Instead, use https://periph.io/x/periph/conn/spi/spireg#Open. This permits
+// it to work on all operating systems, or devices like SPI over USB.
 func NewSPI(busNumber, chipSelect int) (*SPI, error) {
 	if isLinux {
 		return newSPI(busNumber, chipSelect)
@@ -59,21 +67,6 @@ type SPI struct {
 	mosi        gpio.PinOut
 	miso        gpio.PinIn
 	cs          gpio.PinOut
-}
-
-func newSPI(busNumber, chipSelect int) (*SPI, error) {
-	if busNumber < 0 || busNumber >= 1<<16 {
-		return nil, fmt.Errorf("sysfs-spi: invalid bus %d", busNumber)
-	}
-	if chipSelect < 0 || chipSelect > 255 {
-		return nil, fmt.Errorf("sysfs-spi: invalid chip select %d", chipSelect)
-	}
-	// Use the devfs path for now.
-	f, err := ioctlOpen(fmt.Sprintf("/dev/spidev%d.%d", busNumber, chipSelect), os.O_RDWR)
-	if err != nil {
-		return nil, fmt.Errorf("sysfs-spi: %v", err)
-	}
-	return &SPI{f: f, busNumber: busNumber, chipSelect: chipSelect}, nil
 }
 
 // Close closes the handle to the SPI driver. It is not a requirement to close
@@ -186,6 +179,21 @@ func (s *SPI) CS() gpio.PinOut {
 }
 
 // Private details.
+
+func newSPI(busNumber, chipSelect int) (*SPI, error) {
+	if busNumber < 0 || busNumber >= 1<<16 {
+		return nil, fmt.Errorf("sysfs-spi: invalid bus %d", busNumber)
+	}
+	if chipSelect < 0 || chipSelect > 255 {
+		return nil, fmt.Errorf("sysfs-spi: invalid chip select %d", chipSelect)
+	}
+	// Use the devfs path for now.
+	f, err := ioctlOpen(fmt.Sprintf("/dev/spidev%d.%d", busNumber, chipSelect), os.O_RDWR)
+	if err != nil {
+		return nil, fmt.Errorf("sysfs-spi: %v", err)
+	}
+	return &SPI{f: f, busNumber: busNumber, chipSelect: chipSelect}, nil
+}
 
 func (s *SPI) txInternal(w, r []byte) (int, error) {
 	l := len(w)
@@ -503,6 +511,10 @@ func (d *driverSPI) Prerequisites() []string {
 	return nil
 }
 
+func (d *driverSPI) After() []string {
+	return nil
+}
+
 func (d *driverSPI) Init() (bool, error) {
 	// This driver is only registered on linux, so there is no legitimate time to
 	// skip it.
@@ -577,5 +589,7 @@ var _ io.Writer = &spiConn{}
 var _ spi.Conn = &spiConn{}
 var _ spi.Pins = &SPI{}
 var _ spi.Pins = &spiConn{}
+var _ spi.Port = &SPI{}
+var _ spi.PortCloser = &SPI{}
 var _ fmt.Stringer = &SPI{}
 var _ fmt.Stringer = &spiConn{}

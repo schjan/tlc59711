@@ -3,11 +3,13 @@
 // that can be found in the LICENSE file.
 
 // Package spireg defines the SPI registry for SPI ports discovered on the host.
+//
+// SPI ports discovered on the host are automatically registered in the SPI
+// registry by host.Init().
 package spireg
 
 import (
-	"fmt"
-	"sort"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,7 +69,7 @@ func Open(name string) (spi.PortCloser, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		if len(byName) == 0 {
-			err = wrapf("no port found; did you forget to call Init()?")
+			err = errors.New("spireg: no port found; did you forget to call Init()?")
 			return
 		}
 		if len(name) == 0 {
@@ -87,7 +89,7 @@ func Open(name string) (spi.PortCloser, error) {
 		return nil, err
 	}
 	if r == nil {
-		return nil, wrapf("can't open unknown port: %q", name)
+		return nil, errors.New("spireg: can't open unknown port: " + strconv.Quote(name))
 	}
 	return r.Open()
 }
@@ -97,18 +99,14 @@ func Open(name string) (spi.PortCloser, error) {
 //
 // The list is sorted by the port name.
 func All() []*Ref {
-	var out refList
-	func() {
-		mu.Lock()
-		defer mu.Unlock()
-		out = make(refList, 0, len(byName))
-		for _, v := range byName {
-			r := &Ref{Name: v.Name, Aliases: make([]string, len(v.Aliases)), Number: v.Number, Open: v.Open}
-			copy(r.Aliases, v.Aliases)
-			out = append(out, r)
-		}
-	}()
-	sort.Sort(out)
+	mu.Lock()
+	defer mu.Unlock()
+	out := make([]*Ref, 0, len(byName))
+	for _, v := range byName {
+		r := &Ref{Name: v.Name, Aliases: make([]string, len(v.Aliases)), Number: v.Number, Open: v.Open}
+		copy(r.Aliases, v.Aliases)
+		out = insertRef(out, r)
+	}
 	return out
 }
 
@@ -123,54 +121,54 @@ func All() []*Ref {
 // Only ports with the CS #0 are registered with their number.
 func Register(name string, aliases []string, number int, o Opener) error {
 	if len(name) == 0 {
-		return wrapf("can't register a port with no name")
+		return errors.New("spireg: can't register a port with no name")
 	}
 	if o == nil {
-		return wrapf("can't register port %q with nil Opener", name)
+		return errors.New("spireg: can't register port " + strconv.Quote(name) + " with nil Opener")
 	}
 	if number < -1 {
-		return wrapf("can't register port %q with invalid port number %d", name, number)
+		return errors.New("spireg: can't register port " + strconv.Quote(name) + " with invalid port number " + strconv.Itoa(number))
 	}
 	if _, err := strconv.Atoi(name); err == nil {
-		return wrapf("can't register port %q with name being only a number", name)
+		return errors.New("spireg: can't register port " + strconv.Quote(name) + " with name being only a number")
 	}
 	if strings.Contains(name, ":") {
-		return wrapf("can't register port %q with name containing ':'", name)
+		return errors.New("spireg: can't register port " + strconv.Quote(name) + " with name containing ':'")
 	}
 	for _, alias := range aliases {
 		if len(alias) == 0 {
-			return wrapf("can't register port %q with an empty alias", name)
+			return errors.New("spireg: can't register port " + strconv.Quote(name) + " with an empty alias")
 		}
 		if name == alias {
-			return wrapf("can't register port %q with an alias the same as the port name", name)
+			return errors.New("spireg: can't register port " + strconv.Quote(name) + " with an alias the same as the port name")
 		}
 		if _, err := strconv.Atoi(alias); err == nil {
-			return wrapf("can't register port %q with an alias that is a number: %q", name, alias)
+			return errors.New("spireg: can't register port " + strconv.Quote(name) + " with an alias that is a number: " + strconv.Quote(alias))
 		}
 		if strings.Contains(alias, ":") {
-			return wrapf("can't register port %q with an alias containing ':': %q", name, alias)
+			return errors.New("spireg: can't register port " + strconv.Quote(name) + " with an alias containing ':': " + strconv.Quote(alias))
 		}
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
 	if _, ok := byName[name]; ok {
-		return wrapf("can't register port %q twice", name)
+		return errors.New("spireg: can't register port " + strconv.Quote(name) + " twice")
 	}
 	if _, ok := byAlias[name]; ok {
-		return wrapf("can't register port %q twice; it is already an alias", name)
+		return errors.New("spireg: can't register port " + strconv.Quote(name) + " twice; it is already an alias")
 	}
 	if number != -1 {
 		if _, ok := byNumber[number]; ok {
-			return wrapf("can't register port %q; port number %d is already registered", name, number)
+			return errors.New("spireg: can't register port " + strconv.Quote(name) + "; port number " + strconv.Itoa(number) + " is already registered")
 		}
 	}
 	for _, alias := range aliases {
 		if _, ok := byName[alias]; ok {
-			return wrapf("can't register port %q twice; alias %q is already a port", name, alias)
+			return errors.New("spireg: can't register port " + strconv.Quote(name) + " twice; alias " + strconv.Quote(alias) + " is already a port")
 		}
 		if _, ok := byAlias[alias]; ok {
-			return wrapf("can't register port %q twice; alias %q is already an alias", name, alias)
+			return errors.New("spireg: can't register port " + strconv.Quote(name) + " twice; alias " + strconv.Quote(alias) + " is already an alias")
 		}
 	}
 
@@ -195,7 +193,7 @@ func Unregister(name string) error {
 	defer mu.Unlock()
 	r := byName[name]
 	if r == nil {
-		return wrapf("can't unregister unknown port name %q", name)
+		return errors.New("spireg: can't unregister unknown port name " + strconv.Quote(name))
 	}
 	delete(byName, name)
 	delete(byNumber, r.Number)
@@ -239,13 +237,26 @@ func getDefault() *Ref {
 	return o
 }
 
-// wrapf returns an error that is wrapped with the package name.
-func wrapf(format string, a ...interface{}) error {
-	return fmt.Errorf("spireg: "+format, a...)
+func insertRef(l []*Ref, r *Ref) []*Ref {
+	n := r.Name
+	i := search(len(l), func(i int) bool { return l[i].Name > n })
+	l = append(l, nil)
+	copy(l[i+1:], l[i:])
+	l[i] = r
+	return l
 }
 
-type refList []*Ref
-
-func (r refList) Len() int           { return len(r) }
-func (r refList) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
-func (r refList) Less(i, j int) bool { return r[i].Name < r[j].Name }
+// search implements the same algorithm as sort.Search().
+//
+// It was extracted to to not depend on sort, which depends on reflect.
+func search(n int, f func(int) bool) int {
+	lo := 0
+	for hi := n; lo < hi; {
+		if i := int(uint(lo+hi) >> 1); !f(i) {
+			lo = i + 1
+		} else {
+			hi = i
+		}
+	}
+	return lo
+}

@@ -2,31 +2,10 @@
 
 
 [[projects]]
-  name = "github.com/Sirupsen/logrus"
-  packages = ["."]
-  revision = "d682213848ed68c0a260ca37d6dd5ace8423f5ba"
-  version = "v1.0.4"
-
-[[projects]]
   name = "github.com/pkg/errors"
   packages = ["."]
   revision = "645ef00459ed84a119197bfb8d8205042c6df63d"
   version = "v0.8.0"
-
-[[projects]]
-  branch = "master"
-  name = "golang.org/x/crypto"
-  packages = ["ssh/terminal"]
-  revision = "1875d0a70c90e57f11972aefd42276df65e895b9"
-
-[[projects]]
-  branch = "master"
-  name = "golang.org/x/sys"
-  packages = [
-    "unix",
-    "windows"
-  ]
-  revision = "37707fdb30a5b38865cfb95e5aab41707daec7fd"
 
 [[projects]]
   name = "periph.io/x/periph"
@@ -35,6 +14,7 @@
     "conn",
     "conn/gpio",
     "conn/gpio/gpioreg",
+    "conn/gpio/gpiostream",
     "conn/i2c",
     "conn/i2c/i2creg",
     "conn/pin",
@@ -44,7 +24,11 @@
     "devices",
     "host",
     "host/allwinner",
+    "host/am335x",
     "host/bcm283x",
+    "host/beagle/black",
+    "host/beagle/bone",
+    "host/beagle/green",
     "host/chip",
     "host/cpu",
     "host/distro",
@@ -56,12 +40,12 @@
     "host/sysfs",
     "host/videocore"
   ]
-  revision = "bdb4e4c4979bc79ee8c99e6432bd16519d7902a1"
-  version = "v2.1.0"
+  revision = "9d35fc9a57c4bd99dc9560ceef69574dff4b966b"
+  version = "v2.2.0"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "8752394adc43747010289844d6494d432efe21edb07ba9c73d48210c25d3ccbb"
+  inputs-digest = "1458158ba9a2e0ac2a308ea053c5adb6b60339242d242978a3a634d5b7d27437"
   solver-name = "gps-cdcl"
   solver-version = 1
