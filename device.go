@@ -3,6 +3,7 @@ package tlc59711
 import (
 	"fmt"
 	"github.com/pkg/errors"
+	"periph.io/x/periph/conn/physic"
 	"periph.io/x/periph/conn/spi"
 	"periph.io/x/periph/conn/spi/spireg"
 	"periph.io/x/periph/host"
@@ -62,7 +63,7 @@ func (d *Tlc59711) Open(spibus int, spidevice int) error {
 	}
 	d.port = port
 
-	conn, err := port.Connect(int64(8000000), spi.Mode3, 8)
+	conn, err := port.Connect(physic.Frequency(8000000), spi.Mode3, 8)
 	if err != nil {
 		return err
 	}

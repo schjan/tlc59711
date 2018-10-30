@@ -19,36 +19,38 @@ func main() {
 
 	dev.EnableAutoflush()
 
+	// dim up and down
 	for {
-		bla := 0
+		steps := 0
 		start := time.Now()
 		log.Println("start")
 		for i := uint16(0); i < 65505; i += 20 {
 			SetAllValue(dev, i)
 			time.Sleep(10 * time.Millisecond)
-			bla++
+			steps++
 		}
 		for i := uint16(65500); i > 0; i -= 20 {
 			SetAllValue(dev, i)
 			time.Sleep(10 * time.Millisecond)
-			bla++
+			steps++
 		}
 		elapsed := time.Since(start)
 
-		log.Printf("%v steps in %v/n", bla, elapsed)
+		log.Printf("%v steps in %v/n", steps, elapsed)
 	}
 
-	for {
-		start := time.Now()
-		log.Println("start")
-		SetAllValue(dev, 0)
-
-		time.Sleep(500 * time.Millisecond)
-		SetAllValue(dev, 65505)
-		time.Sleep(500 * time.Millisecond)
-		elapsed := time.Since(start)
-		log.Printf("in %v/n", elapsed)
-	}
+	//// blink
+	//for {
+	//	start := time.Now()
+	//	log.Println("start")
+	//	SetAllValue(dev, 0)
+	//
+	//	time.Sleep(500 * time.Millisecond)
+	//	SetAllValue(dev, 65505)
+	//	time.Sleep(500 * time.Millisecond)
+	//	elapsed := time.Since(start)
+	//	log.Printf("in %v/n", elapsed)
+	//}
 }
 
 func SetAllValue(dev *tlc59711.Tlc59711, value uint16) {

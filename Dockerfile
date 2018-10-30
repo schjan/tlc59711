@@ -1,8 +1,8 @@
-FROM golang:1.9-alpine AS build-env
+FROM golang:1.11.1 AS build-env
 
 # Add namespace here to resolve /vendor dependencies
 ENV NAMESPACE github.com/schjan/tlc59711
-WORKDIR /go/src/$NAMESPACE
+WORKDIR /build/
 
 ADD . ./
 
