@@ -1,4 +1,4 @@
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
-periph.io/x/periph v3.6.5+incompatible h1:VXn7+WZ5ell0lFg3QcQJarYX6uMTbhfnNTbBxra3hQQ=
-periph.io/x/periph v3.6.5+incompatible/go.mod h1:EWr+FCIU2dBWz5/wSWeiIUJTriYv9v2j2ENBmgYyy7Y=
+periph.io/x/periph v3.6.6+incompatible h1:ovpqYLdWbnw1EuWml6MdoeoiAaCuvzUnX3imH/wGG5c=
+periph.io/x/periph v3.6.6+incompatible/go.mod h1:EWr+FCIU2dBWz5/wSWeiIUJTriYv9v2j2ENBmgYyy7Y=
